@@ -3,12 +3,21 @@
 import Link from "next/link";
 import { useState } from "react";
 
+import RequireAuth from "@/components/RequireAuth";
 import UploadDropzone from "@/components/UploadDropzone";
 import axios from "axios";
 
 import { FullAnalysisResponse, analyzeDataset } from "@/lib/api";
 
 export default function HomePage() {
+  return (
+    <RequireAuth>
+      <HomePageInner />
+    </RequireAuth>
+  );
+}
+
+function HomePageInner() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<FullAnalysisResponse | null>(null);

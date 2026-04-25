@@ -9,8 +9,9 @@ type GeminiAnalystProps = {
 };
 
 const promptBuilders = {
-  explain: (result: FullAnalysisResponse) => `You are a fairness auditing expert. Analyze this AI bias report and explain it
-clearly to a non-technical business stakeholder.
+  explain: (result: FullAnalysisResponse) => `You are a fairness auditing expert. Explain this bias report to a non-technical business stakeholder.
+
+Rules: Start immediately with the substantive analysis—no greetings, no "let's break down", no meta commentary. Use plain English, no jargon. Write a complete answer through a clear closing summary (do not trail off mid-sentence).
 
 Dataset: ${result.dataset_summary.row_count} rows, ${result.dataset_summary.column_count} columns
 Label column auto-detected: "${result.auto_detection.label_col}"
@@ -20,17 +21,18 @@ Overall risk score: ${result.overall_risk_score}/1.0
 Bias results per group:
 ${JSON.stringify(result.bias_results, null, 2)}
 
-Explain: what the numbers mean, which groups are most disadvantaged,
-and how serious this is. Use plain English. No jargon.`,
-  risks: (result: FullAnalysisResponse) => `You are an AI ethics and legal risk expert. Given this bias audit result,
-identify the top 3 risks this organization faces - legal, reputational, and operational.
-For each risk: state the risk, the evidence from the data, and its severity.
+Cover: what the numbers mean, which groups are most disadvantaged, how serious it is, and one practical takeaway.`,
+  risks: (result: FullAnalysisResponse) => `You are an AI ethics and legal risk expert. No preamble—answer directly.
+
+Given this bias audit result, identify the top 3 risks this organization faces - legal, reputational, and operational.
+For each risk: state the risk, the evidence from the data, and its severity. End with a complete closing sentence.
 
 Bias audit data:
 ${JSON.stringify(result.bias_results, null, 2)}
 Overall risk: ${result.overall_risk_score}`,
-  fixes: (result: FullAnalysisResponse) => `You are a machine learning fairness engineer. Given these bias metrics,
-recommend a concrete remediation plan in 3 steps.
+  fixes: (result: FullAnalysisResponse) => `You are a machine learning fairness engineer. No preamble—answer directly.
+
+Given these bias metrics, recommend a concrete remediation plan in 3 steps.
 
 For each step: name the technique (e.g. re-weighting, adversarial debiasing,
 threshold calibration), when to use it, and roughly how much it typically
@@ -38,7 +40,8 @@ reduces the disparate impact gap. Be specific and actionable.
 
 Bias results:
 ${JSON.stringify(result.bias_results, null, 2)}`,
-  compliance: (result: FullAnalysisResponse) => `You are an AI compliance lawyer specializing in EU AI Act and US EEOC law.
+  compliance: (result: FullAnalysisResponse) => `You are an AI compliance lawyer specializing in EU AI Act and US EEOC law. No preamble—answer directly.
+
 Review this bias audit against:
 1. EU AI Act Article 10 (data governance for high-risk AI)
 2. US EEOC 80% / four-fifths rule
@@ -54,42 +57,77 @@ Disparate impact scores: ${Object.entries(result.bias_results)
   .join(", ")}`,
 };
 
-async function callGeminiGenerate(apiKey: string, prompt: string): Promise<string> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.4, maxOutputTokens: 1500 },
-      }),
-    },
-  );
+const MAX_OUTPUT_TOKENS = 8192;
 
-  const raw = await res.text();
-  let data: unknown;
-  try {
-    data = JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    throw new Error(raw.slice(0, 400) || `HTTP ${res.status}`);
+type GeminiGenerateResult = {
+  text: string;
+  finishReason?: string;
+};
+
+async function callGeminiGenerate(apiKey: string, prompt: string): Promise<GeminiGenerateResult> {
+  const modelCandidates = ["gemini-2.5-flash", "gemini-2.0-flash"];
+  let lastError = "Request failed.";
+
+  for (const model of modelCandidates) {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.4,
+            maxOutputTokens: MAX_OUTPUT_TOKENS,
+          },
+        }),
+      },
+    );
+
+    const raw = await res.text();
+    let data: unknown;
+    try {
+      data = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      lastError = raw.slice(0, 400) || `HTTP ${res.status}`;
+      continue;
+    }
+
+    if (!res.ok) {
+      const err = data as { error?: { message?: string; status?: string } };
+      const msg = err?.error?.message || raw.slice(0, 400) || `HTTP ${res.status}`;
+      if (res.status === 429 || msg.toLowerCase().includes("quota")) {
+        throw new Error(
+          "Gemini quota exceeded for this key/project. In Google AI Studio, enable billing or wait for quota reset, then retry.",
+        );
+      }
+      lastError = msg;
+      continue;
+    }
+
+    const parsed = data as {
+      candidates?: Array<{
+        finishReason?: string;
+        content?: { parts?: Array<{ text?: string }> };
+      }>;
+    };
+    const candidate = parsed?.candidates?.[0];
+    const text =
+      candidate?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+    if (!text.trim()) {
+      lastError = "Empty response from Gemini. Check API key and model access.";
+      continue;
+    }
+    const finishReason = candidate?.finishReason;
+    let out = text;
+    if (finishReason === "MAX_TOKENS") {
+      out +=
+        "\n\n— Note: The model hit its output length limit. Click the same button again for a shorter follow-up, or use a smaller dataset summary.";
+    }
+    return { text: out, finishReason };
   }
 
-  if (!res.ok) {
-    const err = data as { error?: { message?: string } };
-    const msg = err?.error?.message || raw.slice(0, 400) || `HTTP ${res.status}`;
-    throw new Error(msg);
-  }
-
-  const parsed = data as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
-  const text =
-    parsed?.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-  if (!text.trim()) {
-    throw new Error("Empty response from Gemini. Check API key and model access.");
-  }
-  return text;
+  throw new Error(lastError);
 }
 
 export default function GeminiAnalyst({ result }: GeminiAnalystProps) {
@@ -117,7 +155,7 @@ export default function GeminiAnalyst({ result }: GeminiAnalystProps) {
     setError("");
     setResponse("");
     try {
-      const text = await callGeminiGenerate(key, prompt);
+      const { text } = await callGeminiGenerate(key, prompt);
       setResponse(text);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Request failed.";
@@ -207,10 +245,13 @@ export default function GeminiAnalyst({ result }: GeminiAnalystProps) {
         style={{
           border: "1px solid #e5e7eb",
           borderRadius: 10,
-          minHeight: 220,
+          minHeight: 480,
+          maxHeight: "75vh",
+          overflowY: "auto",
           padding: 12,
           background: "#f8fafc",
           whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
         }}
       >
         {response}

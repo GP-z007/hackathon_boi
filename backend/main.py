@@ -1,57 +1,170 @@
-from __future__ import annotations
+"""FastAPI app entrypoint with hardened auth, rate limiting, and security headers."""
 
 import asyncio
 import io
-import json
+import os
 import random
-import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Annotated, Any, Dict
 
-import aiosqlite
 import pandas as pd
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.middleware.base import BaseHTTPMiddleware
 
+from auth import get_current_user, get_user_from_ws_token
 from auto_detect import auto_detect_columns, summarize_dataset
 from bias_engine import run_data_audit
+from database import AuditRun, User, async_session_factory, get_db, init_db
+from rate_limit import limiter
+from routes.admin_routes import router as admin_router
+from routes.auth_routes import router as auth_router
 
-DATABASE_PATH = "bias_audit.db"
 
-app = FastAPI(title="Bias Detection Backend")
+MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "10"))
+MAX_BODY_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development").lower()
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+    if origin.strip()
+]
 
+
+app = FastAPI(title="Bias Detection Backend", version="1.0.0")
+
+# slowapi wiring – the limiter must be the SAME instance referenced in the
+# decorators on individual routes (see rate_limit.py).
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+
+# ---------------------------------------------------------------------------
+# Security middleware
+# ---------------------------------------------------------------------------
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Apply hardening headers to every response."""
+
+    async def dispatch(self, request: Request, call_next):
+        response: Response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+        response.headers["Content-Security-Policy"] = "default-src 'self'"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        return response
+
+
+class BodySizeLimitMiddleware(BaseHTTPMiddleware):
+    """Reject any request whose body is larger than MAX_BODY_BYTES."""
+
+    def __init__(self, app, max_bytes: int) -> None:
+        super().__init__(app)
+        self.max_bytes = max_bytes
+
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > self.max_bytes:
+                    return Response(
+                        content=(
+                            f'{{"detail":"Request body exceeds {MAX_UPLOAD_SIZE_MB}MB limit"}}'
+                        ),
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        media_type="application/json",
+                    )
+            except ValueError:
+                pass
+        return await call_next(request)
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_BODY_BYTES)
+
+# CORS comes last so it runs first on the way in (Starlette wraps middleware LIFO).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS or ["http://localhost:3000"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining"],
 )
 
 
-async def init_db() -> None:
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS audit_runs (
-                run_id TEXT PRIMARY KEY,
-                timestamp TEXT NOT NULL,
-                results TEXT NOT NULL
-            )
-            """
-        )
-        await db.commit()
+# ---------------------------------------------------------------------------
+# Routers
+# ---------------------------------------------------------------------------
+
+app.include_router(auth_router)
+app.include_router(admin_router)
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
 
 
 @app.on_event("startup")
 async def startup_event() -> None:
+    # Alembic owns the schema in real deployments; this is a safety net so a
+    # fresh dev box can boot without an explicit `alembic upgrade head`.
     await init_db()
 
 
+# ---------------------------------------------------------------------------
+# Bias-audit endpoints (all require auth)
+# ---------------------------------------------------------------------------
+
+
+def _maybe_reset_user_quota(user: User) -> None:
+    today = datetime.now(timezone.utc).date()
+    if user.api_calls_reset_at != today:
+        user.api_calls_today = 0
+        user.api_calls_reset_at = today
+
+
 @app.post("/analyze")
-async def analyze(file: UploadFile = File(...)):
+@limiter.limit("20/hour")
+async def analyze(
+    request: Request,
+    file: Annotated[UploadFile, File(...)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
     content = await file.read()
+    if len(content) > MAX_BODY_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds {MAX_UPLOAD_SIZE_MB}MB limit",
+        )
+
     try:
         df = pd.read_csv(io.BytesIO(content))
     except Exception as exc:
@@ -74,7 +187,7 @@ async def analyze(file: UploadFile = File(...)):
     dataset_summary = summarize_dataset(transformed_df, label_col, protected_attrs)
 
     bias_results: Dict[str, Dict[str, Any]] = {}
-    disparate_impacts = []
+    disparate_impacts: list[float] = []
     for attr in protected_attrs:
         try:
             audit = run_data_audit(df=transformed_df, label_col=label_col, protected_attr=attr)
@@ -97,35 +210,56 @@ async def analyze(file: UploadFile = File(...)):
         risk = 0.0
     overall_risk_score = max(0.0, min(1.0, risk))
 
-    run_id = str(uuid.uuid4())
-    timestamp = datetime.now(timezone.utc).isoformat()
-    response_payload = {
-        "run_id": run_id,
-        "timestamp": timestamp,
-        "auto_detection": {
-            "label_col": label_col,
-            "label_col_confidence": float(detection["confidence"].get(label_col, 0.5)),
-            "protected_attrs": protected_attrs,
-            "detection_reasoning": {attr: detection["reasoning"].get(attr, "detected") for attr in protected_attrs},
+    auto_detection_payload = {
+        "label_col": label_col,
+        "label_col_confidence": float(detection["confidence"].get(label_col, 0.5)),
+        "protected_attrs": protected_attrs,
+        "detection_reasoning": {
+            attr: detection["reasoning"].get(attr, "detected") for attr in protected_attrs
         },
+    }
+
+    audit_run = AuditRun(
+        user_id=current_user.id,
+        filename=file.filename or "uploaded.csv",
+        row_count=int(len(transformed_df)),
+        overall_risk_score=overall_risk_score,
+        auto_detected_label=label_col,
+        auto_detected_attrs=auto_detection_payload,
+        bias_results=bias_results,
+        dataset_summary=dataset_summary,
+    )
+    db.add(audit_run)
+
+    _maybe_reset_user_quota(current_user)
+    current_user.api_calls_today += 1
+    db.add(current_user)
+
+    await db.commit()
+    await db.refresh(audit_run)
+
+    return {
+        "run_id": audit_run.id,
+        "timestamp": audit_run.created_at.isoformat(),
+        "auto_detection": auto_detection_payload,
         "dataset_summary": dataset_summary,
         "bias_results": bias_results,
         "overall_risk_score": overall_risk_score,
     }
 
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        await db.execute(
-            "INSERT INTO audit_runs (run_id, timestamp, results) VALUES (?, ?, ?)",
-            (run_id, timestamp, json.dumps(response_payload)),
-        )
-        await db.commit()
-
-    return response_payload
-
 
 @app.post("/analyze/preview")
-async def analyze_preview(file: UploadFile = File(...)):
+async def analyze_preview(
+    file: Annotated[UploadFile, File(...)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
     content = await file.read()
+    if len(content) > MAX_BODY_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds {MAX_UPLOAD_SIZE_MB}MB limit",
+        )
+
     try:
         df = pd.read_csv(io.BytesIO(content))
     except Exception as exc:
@@ -146,89 +280,103 @@ async def analyze_preview(file: UploadFile = File(...)):
             "label_col": label_col,
             "label_col_confidence": float(detection["confidence"].get(label_col, 0.5)),
             "protected_attrs": protected_attrs,
-            "detection_reasoning": {attr: detection["reasoning"].get(attr, "detected") for attr in protected_attrs},
+            "detection_reasoning": {
+                attr: detection["reasoning"].get(attr, "detected") for attr in protected_attrs
+            },
         },
         "dataset_summary": dataset_summary,
     }
 
 
 @app.get("/metrics/{run_id}")
-async def get_metrics(run_id: str):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        cursor = await db.execute(
-            "SELECT results FROM audit_runs WHERE run_id = ?",
-            (run_id,),
-        )
-        row = await cursor.fetchone()
-
-    if not row:
+async def get_metrics(
+    run_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    result = await db.execute(select(AuditRun).where(AuditRun.id == run_id))
+    run = result.scalar_one_or_none()
+    if run is None:
         raise HTTPException(status_code=404, detail="Run ID not found")
+    if run.user_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not your audit run")
 
-    stored = json.loads(row[0])
-    if isinstance(stored, dict) and "results" in stored:
-        return {"run_id": run_id, "results": stored["results"]}
-    if isinstance(stored, dict) and "bias_results" in stored:
-        first_attr = next(iter(stored["bias_results"]), None)
-        first_result = stored["bias_results"].get(first_attr, {}) if first_attr else {}
-        return {"run_id": run_id, "results": first_result}
-    return {"run_id": run_id, "results": stored}
+    first_attr = next(iter(run.bias_results), None) if run.bias_results else None
+    first_result = run.bias_results.get(first_attr, {}) if first_attr else {}
+    return {"run_id": run.id, "results": first_result, "all_results": run.bias_results}
 
 
 @app.get("/report/{run_id}")
-async def get_report(run_id: str):
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        cursor = await db.execute(
-            "SELECT timestamp, results FROM audit_runs WHERE run_id = ?",
-            (run_id,),
-        )
-        row = await cursor.fetchone()
-
-    if not row:
+async def get_report(
+    run_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    result = await db.execute(select(AuditRun).where(AuditRun.id == run_id))
+    run = result.scalar_one_or_none()
+    if run is None:
         raise HTTPException(status_code=404, detail="Run ID not found")
+    if run.user_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not your audit run")
 
-    timestamp, results_json = row
-    results = json.loads(results_json)
-    if "bias_results" in results:
-        sections = []
-        for attr, vals in results["bias_results"].items():
-            sections.append(
-                f"{attr}:\n"
-                f"  Disparate Impact: {vals.get('disparate_impact')}\n"
-                f"  Statistical Parity Difference: {vals.get('statistical_parity_difference')}\n"
-                f"  Passes 80 Percent Rule: {vals.get('passes_80_percent_rule')}\n"
-                f"  Severity: {vals.get('severity')}\n"
-            )
-        report_text = (
-            f"Bias Audit Report\n"
-            f"Run ID: {run_id}\n"
-            f"Timestamp: {timestamp}\n\n"
-            f"Label Column: {results.get('auto_detection', {}).get('label_col')}\n"
-            f"Protected Attributes: {', '.join(results.get('auto_detection', {}).get('protected_attrs', []))}\n"
-            f"Overall Risk Score: {results.get('overall_risk_score')}\n\n"
-            + "\n".join(sections)
+    sections = []
+    for attr, vals in (run.bias_results or {}).items():
+        sections.append(
+            f"{attr}:\n"
+            f"  Disparate Impact: {vals.get('disparate_impact')}\n"
+            f"  Statistical Parity Difference: {vals.get('statistical_parity_difference')}\n"
+            f"  Passes 80 Percent Rule: {vals.get('passes_80_percent_rule')}\n"
+            f"  Severity: {vals.get('severity')}\n"
         )
-    else:
-        report_text = (
-            f"Bias Audit Report\n"
-            f"Run ID: {run_id}\n"
-            f"Timestamp: {timestamp}\n\n"
-            f"Disparate Impact: {results.get('disparate_impact')}\n"
-            f"Statistical Parity Difference: {results.get('statistical_parity_difference')}\n"
-            f"Mean Difference: {results.get('mean_difference')}\n"
-            f"Passes 80 Percent Rule: {results.get('passes_80_percent_rule')}\n"
-        )
+    report_text = (
+        f"Bias Audit Report\n"
+        f"Run ID: {run.id}\n"
+        f"Timestamp: {run.created_at.isoformat()}\n"
+        f"User: {current_user.email}\n\n"
+        f"Filename: {run.filename}\n"
+        f"Label Column: {run.auto_detected_label}\n"
+        f"Protected Attributes: {', '.join((run.auto_detected_attrs or {}).get('protected_attrs', []))}\n"
+        f"Overall Risk Score: {run.overall_risk_score}\n\n"
+        + "\n".join(sections)
+    )
 
     return StreamingResponse(
         io.BytesIO(report_text.encode("utf-8")),
         media_type="text/plain",
-        headers={"Content-Disposition": f'attachment; filename="audit_report_{run_id}.txt"'},
+        headers={"Content-Disposition": f'attachment; filename="audit_report_{run.id}.txt"'},
     )
 
 
+# ---------------------------------------------------------------------------
+# Authenticated WebSocket
+# ---------------------------------------------------------------------------
+
+
 @app.websocket("/ws/monitor")
-async def monitor(websocket: WebSocket):
+async def monitor(
+    websocket: WebSocket,
+    token: str | None = Query(default=None),
+):
+    if not token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    async with async_session_factory() as db:
+        try:
+            user = await get_user_from_ws_token(token, db)
+        except HTTPException:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
     await websocket.accept()
     try:
+        await websocket.send_json(
+            {
+                "type": "connected",
+                "user_id": user.id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         while True:
             demographic_parity_diff = round(random.uniform(0.04, 0.20), 4)
             equalized_odds_diff = round(random.uniform(0.04, 0.20), 4)
@@ -251,6 +399,11 @@ async def monitor(websocket: WebSocket):
         await websocket.close()
 
 
+# ---------------------------------------------------------------------------
+# Public health endpoint (skipped from auth so Railway healthchecks work)
+# ---------------------------------------------------------------------------
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "environment": ENVIRONMENT}

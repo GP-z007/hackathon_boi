@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 import AlertBanner from "@/components/AlertBanner";
+import RequireAuth from "@/components/RequireAuth";
+import { useAuth } from "@/lib/auth-context";
 
 type MonitorEvent = {
   timestamp: string;
@@ -12,21 +14,35 @@ type MonitorEvent = {
 };
 
 export default function MonitorPage() {
+  return (
+    <RequireAuth>
+      <MonitorPageInner />
+    </RequireAuth>
+  );
+}
+
+function MonitorPageInner() {
+  const { accessToken } = useAuth();
   const [events, setEvents] = useState<MonitorEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [latestAlert, setLatestAlert] = useState<string | null>(null);
 
   useEffect(() => {
     const wsBase = process.env.NEXT_PUBLIC_WS_URL;
-    if (!wsBase) return;
+    if (!wsBase || !accessToken) return;
 
-    const socket = new WebSocket(`${wsBase}/ws/monitor`);
+    const socket = new WebSocket(
+      `${wsBase}/ws/monitor?token=${encodeURIComponent(accessToken)}`,
+    );
 
     socket.onopen = () => setConnected(true);
     socket.onclose = () => setConnected(false);
     socket.onerror = () => setConnected(false);
     socket.onmessage = (messageEvent) => {
       const payload = JSON.parse(messageEvent.data) as MonitorEvent;
+      // The backend's first message is a connection ack {type: "connected"};
+      // the bias-monitor messages don't have a `type` field. Filter the ack.
+      if ((payload as unknown as { type?: string }).type === "connected") return;
       setEvents((prev) => [payload, ...prev].slice(0, 20));
       setLatestAlert(payload.alert);
     };
@@ -34,7 +50,7 @@ export default function MonitorPage() {
     return () => {
       socket.close();
     };
-  }, []);
+  }, [accessToken]);
 
   const statusStyle = useMemo(
     () => ({

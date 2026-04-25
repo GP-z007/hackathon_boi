@@ -8,3 +8,12 @@ scikit-learn==1.4.2
 aiosqlite==0.20.0
 python-multipart==0.0.9
 pydantic==2.7.1
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+slowapi==0.1.9
+alembic==1.13.1
+sqlalchemy==2.0.36
+itsdangerous==2.2.0
+email-validator==2.1.1
+greenlet>=3.1.1

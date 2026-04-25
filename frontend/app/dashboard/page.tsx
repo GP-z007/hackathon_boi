@@ -6,9 +6,23 @@ import { useEffect, useMemo, useState } from "react";
 import BiasBarChart from "@/components/BiasBarChart";
 import GeminiAnalyst from "@/components/GeminiAnalyst";
 import MetricCard from "@/components/MetricCard";
-import { FullAnalysisResponse, MetricResponse, getMetrics, getReportUrl } from "@/lib/api";
+import RequireAuth from "@/components/RequireAuth";
+import {
+  FullAnalysisResponse,
+  MetricResponse,
+  apiClient,
+  getMetrics,
+} from "@/lib/api";
 
 export default function DashboardPage() {
+  return (
+    <RequireAuth>
+      <DashboardPageInner />
+    </RequireAuth>
+  );
+}
+
+function DashboardPageInner() {
   const [runId, setRunId] = useState("");
   const [metrics, setMetrics] = useState<MetricResponse | null>(null);
   const [fullAnalysis, setFullAnalysis] = useState<FullAnalysisResponse | null>(null);
@@ -89,7 +103,23 @@ export default function DashboardPage() {
 
           <div style={{ marginTop: 16, display: "flex", gap: 16, alignItems: "center" }}>
             <button
-              onClick={() => window.open(getReportUrl(runId), "_blank", "noopener,noreferrer")}
+              onClick={async () => {
+                try {
+                  const response = await apiClient.get(`/report/${runId}`, {
+                    responseType: "blob",
+                  });
+                  const url = window.URL.createObjectURL(response.data as Blob);
+                  const link = document.createElement("a");
+                  link.href = url;
+                  link.download = `audit_report_${runId}.txt`;
+                  document.body.appendChild(link);
+                  link.click();
+                  link.remove();
+                  window.URL.revokeObjectURL(url);
+                } catch {
+                  setError("Failed to download report.");
+                }
+              }}
               style={{
                 padding: "10px 14px",
                 background: "#2563eb",

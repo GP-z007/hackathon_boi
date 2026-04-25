@@ -4,3 +4,9 @@
 **/__pycache__/
 *.pyc
 *.pyo
+
+# Local secrets / dev artefacts (never commit)
+.env
+backend/.env
+backend/bias_audit.db
+backend/bias_audit.db-journal
