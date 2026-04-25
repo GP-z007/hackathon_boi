@@ -11,7 +11,7 @@ Upload a CSV, get an audit. The system auto-detects the label column and protect
 | ML / fairness | scikit-learn, AIF360, Fairlearn, SHAP, DoWhy, DiCE, SDV, Evidently, sentence-transformers |
 | Storage | PostgreSQL (Postgres+asyncpg in prod, SQLite for local dev), filesystem for uploads |
 | Reporting | WeasyPrint (PDF), Jinja2, matplotlib |
-| Deployment | Render (backend, Docker + managed Postgres) + Vercel (frontend) |
+| Deployment | Railway (backend, Docker + managed Postgres) + Vercel (frontend) |
 
 ---
 
@@ -79,8 +79,8 @@ h6/
 │   ├── components/                   Shared UI (AppShell, RunSelector, Badge, …)
 │   ├── lib/api.ts                    Typed API client
 │   └── vercel.json                   Vercel deploy config
-├── render.yaml                       Render Blueprint (backend service + Postgres)
-├── DEPLOY.md                         Step-by-step Render + Vercel guide
+├── backend/railway.toml              Railway service config (forces Dockerfile builder)
+├── DEPLOY.md                         Step-by-step Railway + Vercel guide
 └── README.md                         You are here
 ```
 
@@ -161,20 +161,26 @@ Full request/response shapes live in `backend/main.py` and `frontend/lib/api.ts`
 
 ## Deployment
 
-See **[DEPLOY.md](./DEPLOY.md)** for the full Render + Vercel walkthrough. The TL;DR:
+See **[DEPLOY.md](./DEPLOY.md)** for the full Railway + Vercel walkthrough. The TL;DR:
 
 ```text
-backend/  → Render   (one-click via render.yaml Blueprint: web + managed Postgres)
+backend/  → Railway  (Dockerfile builder + managed Postgres add-on)
 frontend/ → Vercel   (vercel.json, framework auto-detect)
 
 Required envs:
-  backend  → SECRET_KEY (auto), ENVIRONMENT, CORS_ORIGINS, DATABASE_URL (auto), MAX_UPLOAD_SIZE_MB (auto)
+  backend  → SECRET_KEY, ENVIRONMENT, CORS_ORIGINS, DATABASE_URL (auto from Postgres add-on),
+             MAX_UPLOAD_SIZE_MB
   frontend → NEXT_PUBLIC_API_URL, NEXT_PUBLIC_WS_URL
 ```
 
-Why Render over Railway: this stack ships ~4 GB of ML deps (torch + sdv +
-sentence-transformers + aif360) which exceeds Railway's image-size cap. Render's
-Starter tier accepts the image and gives you a free managed Postgres database.
+The image was deliberately slimmed (CPU-only torch, `.dockerignore` excluding
+`.venv` / caches) to fit Railway's plan limits — final image is ~3.5 GB instead
+of the default ~5–6 GB.
+
+> **Heads-up:** if Railway warns `Script start.sh not found`, the service is
+> using nixpacks instead of the Dockerfile builder. Fix in `DEPLOY.md` →
+> "Fixing `Script start.sh not found`" — set Root Directory to `backend` and
+> force the Dockerfile builder in service settings.
 
 ---
 
@@ -182,14 +188,14 @@ Starter tier accepts the image and gives you a free managed Postgres database.
 
 ```
 ┌─────────────────┐         HTTPS          ┌──────────────────────────┐
-│  Vercel Edge    │  ──────────────────►   │  Render (Docker)         │
+│  Vercel Edge    │  ──────────────────►   │  Railway (Docker)        │
 │  Next.js 16     │                        │  FastAPI / Uvicorn       │
 │  App Router     │  ◄──────────────────   │  • JWT auth              │
 │  React 18       │      WSS (monitor)     │  • Bias engines          │
 └────────┬────────┘                        │  • PDF rendering         │
          │                                 │                          │
-         │                                 │  Disk → /var/data (CSVs) │
-         │                                 │  Render Postgres         │
+         │                                 │  Volume → /data (CSVs)   │
+         │                                 │  Railway Postgres add-on │
          ▼                                 └──────────────────────────┘
   Browser
   • CSV upload

@@ -2,13 +2,15 @@
 
 This guide walks you through a clean production deployment:
 
-- **Backend (FastAPI + Postgres)** → **Render**, via Docker
+- **Backend (FastAPI + Postgres)** → **Railway**, via Docker
 - **Frontend (Next.js)** → **Vercel**
 - **Domain wiring** → CORS + HTTPS + WebSocket origins
 
-Total time: ~20 minutes. Render is preferred over Railway because Railway's
-image-size cap rejects this stack (CPU-only torch + sdv + sentence-transformers
-sits around 4 GB even after slimming).
+Total time: ~20 minutes.
+
+The image was deliberately slimmed (CPU-only torch via `Dockerfile`,
+`backend/.dockerignore` excluding `.venv` / caches) to fit Railway's plan
+limits. Final image is ~3.5 GB instead of the default ~5–6 GB.
 
 ---
 
@@ -17,93 +19,138 @@ sits around 4 GB even after slimming).
 | You need | How to get it |
 |---|---|
 | GitHub repo with this code | already pushed to `origin` |
-| Render account | <https://render.com> (free signup; **Starter** $7/mo for the backend — Free 256 MB won't fit the model deps) |
-| Vercel account | <https://vercel.com> (Hobby tier is free and fine) |
+| Railway account | <https://railway.app> ($5 Hobby plan recommended — Trial may OOM during model load) |
+| Vercel account | <https://vercel.com> (Hobby tier is free) |
 
 The repo is pre-configured for both platforms:
 
-- `render.yaml` (repo root) — Render Blueprint: web service + managed Postgres, plus all env vars wired up
-- `backend/Dockerfile` — Python 3.11-slim base, system libs (cairo/pango for PDF), CPU-only torch pre-installed
-- `backend/.dockerignore` — keeps `.venv`, caches, and DB files out of the build context
+- `backend/Dockerfile` — Python 3.11-slim, system libs (cairo/pango for PDF), CPU-only torch pre-installed
+- `backend/.dockerignore` — keeps `.venv/`, caches, and DB files out of the build context (saves ~3 GB)
+- `backend/railway.toml` — **forces the Dockerfile builder** (without this, Railway falls back to nixpacks and complains `Script start.sh not found`)
 - `frontend/vercel.json` — installs with `--legacy-peer-deps` to handle the `react-markdown` ↔ `eslint-config-next` peer-range conflict
 
-The backend auto-rewrites `postgres://` (Render's default URL form) to
-`postgresql+asyncpg://`, so you don't have to edit the URL manually.
+The backend auto-rewrites `postgres://` (legacy) and bare `postgresql://` URLs
+to `postgresql+asyncpg://`, so you don't have to edit the Postgres URL by hand.
 
 ---
 
-## 1. Deploy the backend on Render
+## ⚠ Fixing `Script start.sh not found`
 
-### 1.1 Create the Blueprint
+If Railway shows this warning, the service is using **nixpacks** instead of
+**dockerfile**. Cause: the service was created before `railway.toml` existed,
+or Railway's auto-detection didn't see the file.
 
-1. Open <https://dashboard.render.com>.
-2. Click **+ New** → **Blueprint**.
-3. Connect this GitHub repo. Render reads `render.yaml` automatically.
-4. You'll see two resources to provision:
-   - `fairaudit-backend` (Web Service, Docker)
-   - `fairaudit-db` (PostgreSQL, free tier)
-5. Click **Apply**. The first build takes ~10–15 min (heavy ML deps).
+Fix in the Railway dashboard, in this exact order:
 
-### 1.2 Set the only env var Render can't auto-fill
+1. Service → **Settings** → **Source** → confirm **Root Directory** is set to
+   `backend` *(not the repo root, not `/`)*.
+2. Service → **Settings** → **Build** → **Builder** = **Dockerfile**
+   (the dropdown). If you see a "Build Command" field, leave it empty.
+3. Service → **Settings** → **Deploy** → **Custom Start Command** = leave empty
+   (let the Dockerfile's `CMD` run).
+4. Click **Redeploy**.
 
-`render.yaml` marks `CORS_ORIGINS` as `sync: false` so you have to set it manually
-once you know your Vercel URL.
+After this, builds run from `backend/Dockerfile` and the `start.sh` warning
+disappears for good.
 
-For now, leave it blank or set a placeholder — the backend will still boot.
-You'll come back to this in step 2.4.
+If the dropdown still shows "Nixpacks" after the changes, you have a stale
+service. Easiest fix: **+ New** → **GitHub Repo** → select this repo → set
+Root Directory = `backend` *during creation* — Railway then reads
+`railway.toml` on first deploy and never tries nixpacks.
 
-Everything else is auto-wired:
+---
 
-| Env var | Source |
+## 1. Deploy the backend on Railway
+
+### 1.1 Create the project
+
+1. Go to <https://railway.app/new> → **Deploy from GitHub repo** → pick this repo.
+2. **Important:** when prompted for the service root, choose **`backend`**
+   (not the repo root). Railway auto-detects `railway.toml` + `Dockerfile`.
+3. The first build takes ~10–15 min — the heavy ML deps (`sdv`,
+   `sentence-transformers`, `aif360`, `shap`) compile / download.
+
+### 1.2 Add managed Postgres
+
+> SQLite on Railway is **ephemeral** — every redeploy wipes it. Use Postgres in production.
+
+1. In your project, click **+ New** → **Database** → **Add PostgreSQL**.
+2. Railway auto-injects `DATABASE_URL` into the same project as
+   `postgresql://USER:PASS@HOST:PORT/DB`. The backend's `database.py`
+   auto-rewrites that to `postgresql+asyncpg://...` on boot, so you can
+   leave the variable as-is.
+
+   *(If you previously hand-edited `DATABASE_URL` to `postgresql+asyncpg://`,
+   that's also fine — the rewrite is idempotent.)*
+
+### 1.3 Set the rest of the env vars
+
+In your backend service → **Variables**:
+
+| Key | Value |
 |---|---|
-| `SECRET_KEY` | Auto-generated by Render (`generateValue: true`) |
-| `ENVIRONMENT` | `production` (from `render.yaml`) |
-| `MAX_UPLOAD_SIZE_MB` | `10` (from `render.yaml`) |
-| `DATABASE_URL` | Wired from the Postgres add-on (`fromDatabase`) |
-| `PORT` | Injected by Render at runtime |
+| `SECRET_KEY` | run `python -c "import secrets; print(secrets.token_hex(32))"` and paste |
+| `ENVIRONMENT` | `production` |
+| `CORS_ORIGINS` | `https://your-app.vercel.app` *(no trailing slash; comma-separate multiple)* |
+| `MAX_UPLOAD_SIZE_MB` | `10` |
+| `DATASET_STORAGE_DIR` | `/data` *(only if you attach a Volume — see 1.4)* |
 
-### 1.3 Verify
-
-Once the build is green, Render gives you a URL like
-`https://fairaudit-backend.onrender.com`. Smoke-test it:
-
-```bash
-curl https://fairaudit-backend.onrender.com/health
-# → {"status":"ok"}
-```
-
-Common boot failures, all visible in the **Logs** tab:
-
-- `SECRET_KEY environment variable is required` → make sure the Blueprint
-  applied; Render should have generated one.
-- `sqlalchemy.exc.NoSuchModuleError: postgresql.asyncpg` → you're on an old
-  commit; pull `main`, the URL coercion is in `backend/database.py`.
-- OOMs during model load → upgrade plan to Standard ($25/mo, 2 GB RAM) for
-  full SDV + sentence-transformers; otherwise, drop those two engines from
-  `requirements.txt` and the API still works (graceful fallbacks).
+`PORT` is injected by Railway automatically — do not set it manually.
+`DATABASE_URL` is wired automatically by the Postgres add-on.
 
 ### 1.4 (Optional) Persistent uploads
 
-Render web-service filesystems are **ephemeral** — every redeploy and restart
-wipes them. Causal / recourse / synthetic endpoints re-read the original CSV,
-so on a long-lived deployment you'll want a disk:
+Uploaded CSVs are needed by causal / recourse / synthetic re-runs. The
+container filesystem is wiped on every deploy, so for a long-lived deployment:
 
-1. In `render.yaml`, uncomment the `disk:` block at the bottom of the service.
-2. Uncomment the `DATASET_STORAGE_DIR=/var/data` env var.
-3. Push; Render attaches a 1 GB persistent disk on the next deploy.
+1. Service → **Volumes** → **+ New Volume** → mount path `/data`.
+2. Set `DATASET_STORAGE_DIR=/data`.
 
-(The Free plan doesn't support disks; Starter and up do.)
+### 1.5 Verify
 
-### 1.5 Reset the database (when you want a clean slate)
+After deploy, Railway shows a public URL like
+`https://fairaudit-backend.up.railway.app`. Smoke-test it:
 
 ```bash
-# Render dashboard → Postgres service → "Connect" → copy psql command, then:
-psql 'postgres://USER:PASS@HOST/bias_audit'
+curl https://fairaudit-backend.up.railway.app/health
+# → {"status":"ok"}
+```
+
+If `/health` 502s, check **Deployments → Logs** for `Application startup
+complete.` Common boot failures:
+
+- `SECRET_KEY environment variable is required` → set `SECRET_KEY` in
+  Railway variables
+- `sqlalchemy.exc.NoSuchModuleError: postgresql.asyncpg` → you're on an old
+  commit; pull `main` (the URL coercion lives in `backend/database.py`)
+- OOM during startup → upgrade to Hobby plan ($5) for 2 GB RAM. SDV +
+  sentence-transformers won't fit in Trial's 512 MB
+
+### 1.6 Reset the database (when you want a clean slate)
+
+```bash
+railway connect Postgres   # opens psql against the managed DB
 > DROP SCHEMA public CASCADE; CREATE SCHEMA public;
 > \q
 ```
 
 Next backend deploy auto-runs `alembic upgrade head` and rebuilds the schema.
+
+### 1.7 If the image is still too big
+
+Railway's image cap depends on plan. If you hit a size error, the cheapest
+cut is removing the two largest optional engines:
+
+```diff
+# backend/requirements.txt
+- sdv==1.9.0
+- sentence-transformers==3.0.1
++ # sdv and sentence-transformers removed for image-size budget; the
++ # synthetic-data and regulatory-NLP engines fall back gracefully.
+```
+
+That alone drops ~2 GB. Both `synthetic_engine.py` and the regulatory NLP
+path have graceful fallbacks, so the API still serves all endpoints.
 
 ---
 
@@ -122,8 +169,8 @@ Vercel → **Settings → Environment Variables**, add to **all environments**:
 
 | Key | Value |
 |---|---|
-| `NEXT_PUBLIC_API_URL` | `https://fairaudit-backend.onrender.com` |
-| `NEXT_PUBLIC_WS_URL` | `wss://fairaudit-backend.onrender.com` *(note `wss`, not `ws`)* |
+| `NEXT_PUBLIC_API_URL` | `https://fairaudit-backend.up.railway.app` |
+| `NEXT_PUBLIC_WS_URL` | `wss://fairaudit-backend.up.railway.app` *(note `wss`, not `ws`)* |
 
 Both keys must be `NEXT_PUBLIC_*` so they're inlined into the client bundle
 at build time.
@@ -136,17 +183,17 @@ Click **Deploy**. First build takes ~2 min. Verify:
 - Sidebar shows all routes (`/dashboard`, `/intersectional`, `/causal`,
   `/recourse`, `/synthetic`, `/compliance`, `/model-card`, `/lineage`,
   `/monitor`, `/reports`)
-- `/monitor` connects to the live WebSocket (no console errors about `ws://`)
+- `/monitor` connects to the live WebSocket (no console errors)
 
 ### 2.4 Wire CORS
 
-Now go back to Render → **fairaudit-backend → Environment** → set:
+Now go back to Railway → backend → Variables → set:
 
 ```text
 CORS_ORIGINS=https://your-app.vercel.app
 ```
 
-(no trailing slash; comma-separate multiple). Render redeploys
+(no trailing slash; comma-separate multiple). Railway redeploys
 automatically in ~30 s.
 
 ---
@@ -160,8 +207,8 @@ Vercel → **Settings → Domains** → add `fairaudit.example.com`. DNS:
 
 ### Backend
 
-Render → service → **Settings → Custom Domains** → `api.fairaudit.example.com`.
-DNS: `CNAME → <generated render target>`.
+Railway → **Settings → Networking → Public Networking → + Custom Domain** →
+`api.fairaudit.example.com`. DNS: `CNAME → <generated railway target>`.
 
 After both resolve, update `CORS_ORIGINS` and `NEXT_PUBLIC_API_URL` /
 `NEXT_PUBLIC_WS_URL` to use the custom domains.
@@ -179,7 +226,7 @@ After both resolve, update `CORS_ORIGINS` and `NEXT_PUBLIC_API_URL` /
 - [ ] Synthetic data download produces a valid CSV
 - [ ] Compliance accordion expands per regulation
 - [ ] Vercel build log shows zero TypeScript errors
-- [ ] Render logs show `Application startup complete.` and no `bcrypt` warnings
+- [ ] Railway logs show `Application startup complete.` and no `bcrypt` warnings
 
 ---
 
@@ -187,16 +234,16 @@ After both resolve, update `CORS_ORIGINS` and `NEXT_PUBLIC_API_URL` /
 
 | Symptom | Fix |
 |---|---|
+| Railway: `Script start.sh not found` | Service is using nixpacks. See the ⚠ section above — set Root Directory to `backend`, set Builder to "Dockerfile" |
 | Vercel build: `ERESOLVE could not resolve … react-markdown` | Confirm `vercel.json` has `installCommand: npm install --legacy-peer-deps` |
-| Render build: `Image size exceeds plan limit` | You're on Free / Hobby. Upgrade to Starter, or remove `sdv` + `sentence-transformers` from `requirements.txt` (their fallbacks keep the API working) |
-| Render boot: `SECRET_KEY environment variable is required` | Blueprint didn't apply. In dashboard: service → Environment → add manually with `python -c "import secrets; print(secrets.token_hex(32))"` |
-| Render boot: `sqlalchemy.exc.NoSuchModuleError: postgresql.asyncpg` | Old commit. Pull `main` — `database.py` auto-rewrites `postgres://` to `postgresql+asyncpg://` |
+| Railway: `Image size exceeded` | See §1.7 — drop `sdv` + `sentence-transformers`, or upgrade plan |
+| Railway boot: `SECRET_KEY environment variable is required` | Set `SECRET_KEY` in Railway variables |
+| Railway boot: `sqlalchemy.exc.NoSuchModuleError: postgresql.asyncpg` | Pull `main` — `database.py` auto-rewrites `postgres://` and `postgresql://` to the asyncpg form |
 | Frontend → backend: CORS error in browser | `CORS_ORIGINS` doesn't match the actual Vercel domain (case-sensitive, no trailing slash) |
 | `/monitor` WebSocket fails | Use `wss://` (not `ws://`) for the production `NEXT_PUBLIC_WS_URL` |
-| Render OOMs during model load | Starter has 512 MB; upgrade to Standard for 2 GB, or drop optional engines |
-| Uploads disappear after redeploy | Uncomment the `disk:` block in `render.yaml`, set `DATASET_STORAGE_DIR=/var/data` |
+| Railway memory OOMs during model load | Upgrade to Hobby plan ($5, 2 GB RAM); SDV + sentence-transformers won't fit in Trial's 512 MB |
+| Uploads disappear after redeploy | Attach a Volume → set `DATASET_STORAGE_DIR=/data` |
 | Migrations not running | Confirm Dockerfile's `CMD` still has `alembic upgrade head &&` |
-| Free Postgres database expires after 90 days | Upgrade Postgres to Starter ($7/mo) before the deadline |
 
 ---
 
@@ -217,22 +264,6 @@ cp .env.local.example .env.local
 npm run dev           # http://localhost:3000
 ```
 
-That's it. If something breaks in production that doesn't break locally, the
-difference is almost always one of the env vars in section 1.2 / 2.2.
-
----
-
-## 7. Why Render (and not Railway / Fly / etc.)?
-
-| Platform | Outcome |
-|---|---|
-| **Render** ✅ | Image-size cap is generous (multi-GB Docker images allowed on Starter); managed Postgres free tier; `render.yaml` Blueprint pins everything |
-| **Railway** ❌ | Image-size cap rejects this stack (~4 GB even after CPU-only torch slim) |
-| **Fly.io** ⚠️ | Works, but needs `fly.toml` and a Postgres add-on; we don't ship that config |
-| **Heroku** ⚠️ | Works with the auto-rewrite of `postgres://` (already done), but slug-size limits are similar to Railway's |
-
-If the image keeps growing past Render's plan limits too, the cheapest cut is
-removing `sdv==1.9.0` and `sentence-transformers==3.0.1` from
-`requirements.txt`. Both engines have graceful fallbacks in
-`synthetic_engine.py` and the regulatory NLP path; the API still serves all
-endpoints, just without those specific generative/embedding capabilities.
+That's it. If something breaks in production that doesn't break locally,
+the difference is almost always one of the env vars in section 1.3 / 2.2
+or the `start.sh / nixpacks` issue from the warning section above.

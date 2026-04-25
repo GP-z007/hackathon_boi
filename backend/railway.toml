@@ -1,0 +1,29 @@
+[build]
+# Force the Docker builder. Without this, Railway falls back to nixpacks,
+# auto-detects FastAPI, and complains "Script start.sh not found" because
+# nixpacks expects a start.sh in the repo root. The Dockerfile already
+# defines CMD, so we don't need a start script.
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# CMD in the Dockerfile already runs `alembic upgrade head && uvicorn ...`.
+# Repeating it here as startCommand makes the deploy intent explicit and
+# overrides any UI-set custom command from a previous service config.
+startCommand = "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+
+# ───── Required environment variables (set in the Railway dashboard) ─────
+#
+#   SECRET_KEY         python -c "import secrets; print(secrets.token_hex(32))"
+#   ENVIRONMENT        production
+#   CORS_ORIGINS       https://your-app.vercel.app   (no trailing slash)
+#   DATABASE_URL       ${{Postgres.DATABASE_URL}}    (auto-resolves to
+#                      postgresql://USER:PASS@HOST/DB; database.py
+#                      auto-rewrites that to postgresql+asyncpg://...)
+#   MAX_UPLOAD_SIZE_MB 10
+#
+# Optional:
+#   DATASET_STORAGE_DIR   /data   (only meaningful if you attach a Volume)

@@ -38,11 +38,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Layer 4: application code (changes most often; keep last for cache hits)
 COPY . .
 
-# Render / Railway / Fly inject $PORT at runtime; default to 8000 for local
+# Railway / Fly / Render inject $PORT at runtime; default to 8000 for local
 # `docker run`.
 ENV PORT=8000
 EXPOSE 8000
 
-# Run migrations then start the server. Same command as render.yaml /
-# railway.toml so a raw `docker run` matches managed-platform behaviour.
+# Run migrations then start the server. Same command as railway.toml's
+# startCommand so a raw `docker run` matches managed-platform behaviour.
+# Shell form is required so ${PORT} expands at container start.
 CMD alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port ${PORT}
