@@ -7,10 +7,9 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# CMD in the Dockerfile already runs `alembic upgrade head && uvicorn ...`.
-# Repeating it here as startCommand makes the deploy intent explicit and
-# overrides any UI-set custom command from a previous service config.
-startCommand = "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port $PORT"
+# Intentionally no startCommand here.
+# Let Dockerfile CMD run as the single source of truth; this avoids
+# platform-specific command parsing edge cases around $PORT expansion.
 healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "on_failure"
