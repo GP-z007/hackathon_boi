@@ -35,10 +35,17 @@ if config.config_file_name is not None:
 
 
 def _resolve_database_url() -> str:
-    """Pull DATABASE_URL from env, then convert async drivers to sync drivers."""
+    """Pull DATABASE_URL from env, then convert async drivers to sync drivers.
+
+    Also normalises `postgres://` (Render/Heroku) and bare `postgresql://`
+    URLs so Alembic never blows up on a scheme SQLAlchemy 2 rejects.
+    """
     url = os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
     if not url:
         url = "sqlite:///./bias_audit.db"
+    # Render / Heroku expose postgres://; rewrite to the canonical scheme.
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
     # Alembic itself runs synchronously; downgrade async drivers transparently.
     url = url.replace("+aiosqlite", "")
     url = url.replace("postgresql+asyncpg", "postgresql+psycopg2")

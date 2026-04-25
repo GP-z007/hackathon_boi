@@ -1,0 +1,59 @@
+# Render Blueprint — provisions the FastAPI backend and a managed Postgres
+# database in one click. After connecting this repo to Render, hit
+# "Create New" → "Blueprint" and Render reads this file.
+#
+# Docs: https://render.com/docs/blueprint-spec
+
+databases:
+  - name: fairaudit-db
+    plan: free                # 1 GB storage, fine for hackathon traffic
+    databaseName: bias_audit
+    user: bias_audit
+    # Free Postgres on Render is suspended after 90 days; rotate to Starter
+    # ($7/mo) for production.
+
+services:
+  - type: web
+    name: fairaudit-backend
+    runtime: docker
+    plan: starter             # 512 MB RAM / 0.5 CPU. Free won't fit (256 MB).
+    region: oregon            # change to singapore / frankfurt / ohio if closer
+    branch: main
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
+
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true   # Render generates a strong random value once
+
+      - key: ENVIRONMENT
+        value: production
+
+      - key: MAX_UPLOAD_SIZE_MB
+        value: "10"
+
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fairaudit-db
+          property: connectionString
+        # Render injects postgres://USER:PASS@HOST/DB. database.py auto-rewrites
+        # to postgresql+asyncpg://… so SQLAlchemy 2 + asyncpg are happy.
+
+      - key: CORS_ORIGINS
+        sync: false           # set this manually after Vercel gives you a URL
+        # value: https://your-app.vercel.app
+
+      # Optional: pin uploads to a persistent disk if you attach one below.
+      # - key: DATASET_STORAGE_DIR
+      #   value: /var/data
+
+    # Uploaded CSVs are needed by causal/recourse/synthetic re-runs. Without a
+    # persistent disk, Render wipes them on every redeploy. Uncomment to attach
+    # a 1 GB disk (Starter plan supports disks up to 100 GB).
+    # disk:
+    #   name: uploads
+    #   mountPath: /var/data
+    #   sizeGB: 1

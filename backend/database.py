@@ -26,7 +26,24 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./bias_audit.db")
+def _normalize_database_url(url: str) -> str:
+    """Coerce hosted-Postgres URLs into the async-driver form SQLAlchemy needs.
+
+    Render and Heroku expose `postgres://...`. SQLAlchemy 2.x rejects that
+    scheme, and our app uses the async runtime so it specifically needs
+    `postgresql+asyncpg://...`. Rewrite both legacy variants transparently
+    so operators never need to hand-edit the URL injected by the platform.
+    """
+    if url.startswith("postgres://"):
+        return "postgresql+asyncpg://" + url[len("postgres://"):]
+    if url.startswith("postgresql://") and "+" not in url.split("://", 1)[0]:
+        return "postgresql+asyncpg://" + url[len("postgresql://"):]
+    return url
+
+
+DATABASE_URL = _normalize_database_url(
+    os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./bias_audit.db")
+)
 
 
 def _utcnow() -> datetime:

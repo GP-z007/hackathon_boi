@@ -19,17 +19,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python deps first so Docker can cache the layer between code edits.
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+# Layer 1: pip itself (cacheable)
+RUN pip install --no-cache-dir --upgrade pip
 
+# Layer 2: CPU-only PyTorch.
+# Pre-installing torch from the CPU wheel index drops ~1.5 GB of CUDA libs
+# from the image. sentence-transformers / sdv only need CPU inference here.
+# We pin to a version that satisfies sdv 1.9.0 + sentence-transformers 3.0.1.
+RUN pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.4.0
+
+# Layer 3: the rest of the deps. pip sees torch is already satisfied and
+# won't re-pull the CUDA wheel.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Layer 4: application code (changes most often; keep last for cache hits)
 COPY . .
 
-# Railway injects $PORT at runtime; default to 8000 for local `docker run`.
+# Render / Railway / Fly inject $PORT at runtime; default to 8000 for local
+# `docker run`.
 ENV PORT=8000
 EXPOSE 8000
 
-# Run migrations then start the server. Same command as railway.toml so a
-# raw `docker run` matches Railway's deploy behaviour.
+# Run migrations then start the server. Same command as render.yaml /
+# railway.toml so a raw `docker run` matches managed-platform behaviour.
 CMD alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port ${PORT}

@@ -11,7 +11,7 @@ Upload a CSV, get an audit. The system auto-detects the label column and protect
 | ML / fairness | scikit-learn, AIF360, Fairlearn, SHAP, DoWhy, DiCE, SDV, Evidently, sentence-transformers |
 | Storage | PostgreSQL (Postgres+asyncpg in prod, SQLite for local dev), filesystem for uploads |
 | Reporting | WeasyPrint (PDF), Jinja2, matplotlib |
-| Deployment | Railway (backend, Docker) + Vercel (frontend) |
+| Deployment | Render (backend, Docker + managed Postgres) + Vercel (frontend) |
 
 ---
 
@@ -59,8 +59,8 @@ h6/
 │   ├── report_generator.py           WeasyPrint PDF
 │   ├── routes/                       Auth + admin sub-routers
 │   ├── alembic/                      Migrations
-│   ├── Dockerfile                    Production image (python:3.11-slim + cairo/pango)
-│   ├── railway.toml                  Railway deploy config
+│   ├── Dockerfile                    Production image (python:3.11-slim + cairo/pango, CPU-only torch)
+│   ├── .dockerignore                 Keeps .venv / caches out of build context
 │   └── requirements.txt
 ├── frontend/                         Next.js app
 │   ├── app/                          App Router pages
@@ -79,7 +79,8 @@ h6/
 │   ├── components/                   Shared UI (AppShell, RunSelector, Badge, …)
 │   ├── lib/api.ts                    Typed API client
 │   └── vercel.json                   Vercel deploy config
-├── DEPLOY.md                         Step-by-step Railway + Vercel guide
+├── render.yaml                       Render Blueprint (backend service + Postgres)
+├── DEPLOY.md                         Step-by-step Render + Vercel guide
 └── README.md                         You are here
 ```
 
@@ -160,16 +161,20 @@ Full request/response shapes live in `backend/main.py` and `frontend/lib/api.ts`
 
 ## Deployment
 
-See **[DEPLOY.md](./DEPLOY.md)** for the full Railway + Vercel walkthrough. The TL;DR:
+See **[DEPLOY.md](./DEPLOY.md)** for the full Render + Vercel walkthrough. The TL;DR:
 
 ```text
-backend/  → Railway (Dockerfile + railway.toml + Postgres add-on)
-frontend/ → Vercel  (vercel.json, framework auto-detect)
+backend/  → Render   (one-click via render.yaml Blueprint: web + managed Postgres)
+frontend/ → Vercel   (vercel.json, framework auto-detect)
 
 Required envs:
-  backend  → SECRET_KEY, ENVIRONMENT, CORS_ORIGINS, DATABASE_URL, MAX_UPLOAD_SIZE_MB
+  backend  → SECRET_KEY (auto), ENVIRONMENT, CORS_ORIGINS, DATABASE_URL (auto), MAX_UPLOAD_SIZE_MB (auto)
   frontend → NEXT_PUBLIC_API_URL, NEXT_PUBLIC_WS_URL
 ```
+
+Why Render over Railway: this stack ships ~4 GB of ML deps (torch + sdv +
+sentence-transformers + aif360) which exceeds Railway's image-size cap. Render's
+Starter tier accepts the image and gives you a free managed Postgres database.
 
 ---
 
@@ -177,14 +182,14 @@ Required envs:
 
 ```
 ┌─────────────────┐         HTTPS          ┌──────────────────────────┐
-│  Vercel Edge    │  ──────────────────►   │  Railway (Docker)        │
+│  Vercel Edge    │  ──────────────────►   │  Render (Docker)         │
 │  Next.js 16     │                        │  FastAPI / Uvicorn       │
 │  App Router     │  ◄──────────────────   │  • JWT auth              │
 │  React 18       │      WSS (monitor)     │  • Bias engines          │
 └────────┬────────┘                        │  • PDF rendering         │
          │                                 │                          │
-         │                                 │  Volume → /data (CSVs)   │
-         │                                 │  Postgres (managed)      │
+         │                                 │  Disk → /var/data (CSVs) │
+         │                                 │  Render Postgres         │
          ▼                                 └──────────────────────────┘
   Browser
   • CSV upload
