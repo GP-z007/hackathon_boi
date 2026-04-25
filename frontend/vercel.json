@@ -1,9 +1,10 @@
 {
-  "buildCommand": "npm run build",
-  "outputDirectory": ".next",
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "env": {
-    "NEXT_PUBLIC_API_URL": "@bias_api_url",
-    "NEXT_PUBLIC_WS_URL": "@bias_ws_url"
+  "buildCommand": "npm run build",
+  "installCommand": "npm install --legacy-peer-deps",
+  "outputDirectory": ".next",
+  "github": {
+    "silent": false
   }
 }

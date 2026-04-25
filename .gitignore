@@ -1,12 +1,52 @@
+# ─── OS / editor ───
 .DS_Store
-.venv/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ─── Python ───
 **/.venv/
+**/venv/
 **/__pycache__/
 *.pyc
 *.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Local secrets / dev artefacts (never commit)
+# ─── Node / Next.js ───
+**/node_modules/
+**/.next/
+**/out/
+**/build/
+**/dist/
+**/coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# ─── Secrets / env files (never commit real values) ───
 .env
-backend/.env
-backend/bias_audit.db
-backend/bias_audit.db-journal
+.env.*
+!.env.example
+!.env.local.example
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.local.example
+
+# ─── Local databases / runtime artefacts ───
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+backend/uploaded_datasets/*
+!backend/uploaded_datasets/.gitkeep
+backend/.alembic_cache/
+
+# ─── Build / deploy ───
+.vercel/
+.railway/
+.qodo/

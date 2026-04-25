@@ -1,0 +1,868 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FairAudit · Bias Audit Report</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+  /* ------------------------------------------------------------------ */
+  /* Page chrome                                                          */
+  /* ------------------------------------------------------------------ */
+  @page {
+    size: A4;
+    margin: 40px 40px 56px 40px;
+    background: #0A0B0F;
+
+    @bottom-left {
+      content: "FairAudit";
+      font-family: 'Inter', 'Helvetica Neue', sans-serif;
+      font-size: 8.5pt;
+      font-weight: 700;
+      letter-spacing: 2.5px;
+      color: #6C63FF;
+      padding-bottom: 8px;
+    }
+    @bottom-center {
+      content: "{{ footer_center_text }}";
+      font-family: 'Inter', 'Helvetica Neue', sans-serif;
+      font-size: 7.5pt;
+      color: #6C6F80;
+      padding-bottom: 8px;
+    }
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: 'Inter', 'Helvetica Neue', sans-serif;
+      font-size: 8.5pt;
+      color: #A8AAB8;
+      padding-bottom: 8px;
+    }
+  }
+
+  /* The cover page is borderless and footerless. */
+  @page :first {
+    margin: 0;
+    background: #0A0B0F;
+    @bottom-left   { content: ""; }
+    @bottom-center { content: ""; }
+    @bottom-right  { content: ""; }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Globals                                                             */
+  /* ------------------------------------------------------------------ */
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #0A0B0F;
+    color: #FFFFFF;
+    font-family: 'Inter', 'Helvetica Neue', sans-serif;
+    font-size: 10pt;
+    line-height: 1.55;
+    -weasy-hyphens: none;
+  }
+
+  .page {
+    page-break-after: always;
+  }
+  .page:last-of-type {
+    page-break-after: auto;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Cover page                                                          */
+  /* ------------------------------------------------------------------ */
+  .cover {
+    width: 210mm;
+    height: 297mm;
+    padding: 40px;
+    position: relative;
+    background: #0A0B0F;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .cover::before {
+    content: "";
+    position: absolute;
+    top: -160px;
+    right: -160px;
+    width: 520px;
+    height: 520px;
+    background: radial-gradient(circle, rgba(108,99,255,0.22), transparent 65%);
+  }
+  .cover::after {
+    content: "";
+    position: absolute;
+    bottom: -180px;
+    left: -180px;
+    width: 480px;
+    height: 480px;
+    background: radial-gradient(circle, rgba(108,99,255,0.12), transparent 70%);
+  }
+  .cover-brand {
+    position: relative;
+    font-size: 11pt;
+    font-weight: 800;
+    letter-spacing: 5px;
+    color: #6C63FF;
+    text-transform: uppercase;
+  }
+  .cover-mid {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    margin-top: 60px;
+  }
+  .cover-eyebrow {
+    font-size: 9pt;
+    color: #A8AAB8;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    margin-bottom: 14px;
+    font-weight: 600;
+  }
+  .cover-title {
+    font-size: 56pt;
+    font-weight: 800;
+    color: white;
+    line-height: 1.0;
+    margin: 0 0 22px;
+    letter-spacing: -1.5px;
+  }
+  .cover-subtitle {
+    font-size: 13pt;
+    color: #A8AAB8;
+    font-weight: 400;
+  }
+  .cover-subtitle .file {
+    color: white;
+    font-weight: 600;
+  }
+  hr.brand-rule {
+    position: relative;
+    border: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #6C63FF 0%, rgba(108,99,255,0.0) 70%);
+    margin: 36px 0 0 0;
+  }
+
+  .cover-risk {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    margin-top: 44px;
+  }
+  .risk-circle {
+    width: 168px;
+    height: 168px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, rgba(108,99,255,0.55), rgba(10,11,15,0.96));
+    border: 6px solid {{ risk_color }};
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 60px rgba(108,99,255,0.45);
+  }
+  .risk-circle .pct {
+    font-size: 36pt;
+    font-weight: 800;
+    color: white;
+    letter-spacing: -1px;
+  }
+  .risk-circle .lbl {
+    font-size: 8pt;
+    color: #C8CADA;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-top: 2px;
+  }
+  .risk-summary .level {
+    font-size: 22pt;
+    font-weight: 800;
+    color: {{ risk_color }};
+    line-height: 1;
+  }
+  .risk-summary .level-sub {
+    color: #A8AAB8;
+    margin-top: 8px;
+    font-size: 10.5pt;
+    max-width: 320px;
+  }
+
+  .cover-footer {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-top: 50px;
+    font-size: 9pt;
+  }
+  .prepared-for {
+    color: #A8AAB8;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-size: 7.5pt;
+    font-weight: 600;
+  }
+  .prepared-for .name {
+    color: white;
+    font-size: 11pt;
+    font-weight: 700;
+    margin-top: 6px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .prepared-for .email {
+    color: #C2C5D6;
+    font-size: 9pt;
+    margin-top: 2px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .confidential {
+    background: rgba(239,68,68,0.18);
+    border: 1px solid rgba(239,68,68,0.45);
+    color: #FCA5A5;
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 8pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Section headers (used on inside pages)                              */
+  /* ------------------------------------------------------------------ */
+  .section-header {
+    border-left: 4px solid #6C63FF;
+    padding: 0 0 2px 14px;
+    margin: 0 0 14px;
+  }
+  .section-header .label {
+    font-size: 8pt;
+    color: #6C63FF;
+    text-transform: uppercase;
+    letter-spacing: 2.6px;
+    font-weight: 700;
+    display: block;
+  }
+  .section-header .title {
+    font-size: 20pt;
+    font-weight: 700;
+    color: white;
+    margin-top: 2px;
+    letter-spacing: -0.3px;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Stats / cards                                                       */
+  /* ------------------------------------------------------------------ */
+  .stats-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 24px;
+  }
+  .stat-box {
+    flex: 1;
+    background: #13151C;
+    border: 1px solid #1F2230;
+    border-radius: 12px;
+    padding: 14px 16px;
+  }
+  .stat-box .v {
+    font-size: 20pt;
+    font-weight: 800;
+    color: white;
+    letter-spacing: -0.5px;
+  }
+  .stat-box .k {
+    font-size: 7.5pt;
+    color: #A8AAB8;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    margin-top: 4px;
+    font-weight: 600;
+  }
+
+  /* Findings list */
+  .findings { margin-bottom: 22px; }
+  .finding {
+    background: #13151C;
+    border: 1px solid #1F2230;
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: flex-start;
+  }
+  .finding .icon {
+    font-size: 13pt;
+    margin-right: 12px;
+    line-height: 1.3;
+  }
+  .finding-text {
+    color: #E2E4F0;
+    font-size: 10pt;
+    flex: 1;
+  }
+
+  /* Generic chart card */
+  .chart-block {
+    background: #13151C;
+    border: 1px solid #1F2230;
+    border-radius: 12px;
+    padding: 10px 14px;
+    margin: 10px 0;
+    page-break-inside: avoid;
+  }
+  .chart-block.centered { text-align: center; }
+  .chart-block img { max-width: 100%; display: block; margin: 0 auto; }
+
+  /* Auto-detection summary */
+  .detect-box {
+    background: linear-gradient(135deg, #13151C, #181B2C);
+    border: 1px solid #2A2D3E;
+    border-radius: 12px;
+    padding: 16px 22px;
+  }
+  .detect-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10pt;
+    padding: 8px 0;
+    border-bottom: 1px solid #1F2230;
+  }
+  .detect-row:last-child { border-bottom: 0; }
+  .detect-row .k { color: #A8AAB8; }
+  .detect-row .v { color: white; font-weight: 600; }
+
+  /* ------------------------------------------------------------------ */
+  /* Per-attribute analysis                                              */
+  /* ------------------------------------------------------------------ */
+  .attr-section {
+    background: #13151C;
+    border: 1px solid #1F2230;
+    border-radius: 10px;
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    page-break-inside: avoid;
+  }
+  .attr-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+  .attr-head .name {
+    font-size: 12pt;
+    font-weight: 700;
+    color: white;
+    letter-spacing: -0.2px;
+  }
+  .severity-badge {
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 7.5pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.4px;
+  }
+
+  .attr-grid {
+    display: table;
+    width: 100%;
+    border-spacing: 0;
+  }
+  .attr-grid .col {
+    display: table-cell;
+    vertical-align: top;
+  }
+  .attr-grid .col-left  { width: 60%; padding-right: 14px; }
+  .attr-grid .col-right { width: 40%; }
+
+  table.metrics {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9pt;
+  }
+  table.metrics th, table.metrics td {
+    text-align: left;
+    padding: 5px 9px;
+    border-bottom: 1px solid #1F2230;
+  }
+  table.metrics th {
+    color: #A8AAB8;
+    text-transform: uppercase;
+    font-size: 7pt;
+    letter-spacing: 1.3px;
+    font-weight: 700;
+    background: #0F111A;
+  }
+  table.metrics td.metric { color: white; font-weight: 500; }
+  table.metrics td.value  { color: #E2E4F0; font-family: 'Inter', monospace; }
+
+  .pass-pill {
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 7pt;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .pass-yes { background: rgba(34,197,94,0.18); color: #4ADE80; }
+  .pass-no  { background: rgba(239,68,68,0.20); color: #F87171; }
+
+  .di-vis {
+    background: #0A0B0F;
+    border: 1px solid #1F2230;
+    border-radius: 10px;
+    padding: 10px 12px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .di-vis .lbl {
+    color: #A8AAB8;
+    font-size: 7pt;
+    text-transform: uppercase;
+    letter-spacing: 1.4px;
+    margin-bottom: 4px;
+    font-weight: 700;
+  }
+  .di-vis .num {
+    font-size: 22pt;
+    font-weight: 800;
+    line-height: 1;
+    margin-bottom: 6px;
+    letter-spacing: -1px;
+  }
+  .di-vis .threshold-note {
+    font-size: 7pt;
+    color: #A8AAB8;
+    margin-top: 6px;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Group distributions                                                  */
+  /* ------------------------------------------------------------------ */
+  table.groups {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 9.5pt;
+    margin-top: 8px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid #1F2230;
+  }
+  table.groups th {
+    background: #0F111A;
+    padding: 10px 12px;
+    text-align: left;
+    font-size: 7.5pt;
+    text-transform: uppercase;
+    letter-spacing: 1.3px;
+    color: #A8AAB8;
+    font-weight: 700;
+  }
+  table.groups td {
+    background: #13151C;
+    padding: 10px 12px;
+    border-top: 1px solid #1F2230;
+    color: white;
+  }
+
+  .group-block {
+    margin-top: 12px;
+    page-break-inside: avoid;
+  }
+  .group-block .attr-name {
+    font-size: 10pt;
+    font-weight: 700;
+    color: white;
+    margin-bottom: 4px;
+  }
+  table.groups th { padding: 6px 10px; }
+  table.groups td { padding: 6px 10px; }
+
+  p.interp {
+    background: #13151C;
+    border: 1px solid #1F2230;
+    border-left: 4px solid #6C63FF;
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-size: 9.5pt;
+    color: #D5D7E5;
+    margin: 14px 0 0 0;
+    line-height: 1.55;
+    page-break-inside: avoid;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Recommendations                                                     */
+  /* ------------------------------------------------------------------ */
+  .rec-card {
+    background: #13151C;
+    border: 1px solid #1F2230;
+    border-left: 4px solid #6C63FF;
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 12px;
+    page-break-inside: avoid;
+  }
+  .rec-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+  }
+  .rec-head .lhs {
+    display: flex;
+    align-items: center;
+  }
+  .rec-head .icon {
+    font-size: 16pt;
+    color: #6C63FF;
+    margin-right: 12px;
+  }
+  .rec-head .title {
+    font-size: 12.5pt;
+    font-weight: 700;
+    color: white;
+  }
+  .effort-badge {
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 7.5pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+  }
+  .effort-Low    { background: rgba(34,197,94,0.18);  color: #4ADE80; }
+  .effort-Medium { background: rgba(245,158,11,0.20); color: #FCD34D; }
+  .effort-High   { background: rgba(239,68,68,0.20);  color: #FCA5A5; }
+
+  .rec-desc {
+    color: #C2C5D6;
+    font-size: 9.5pt;
+    margin-top: 4px;
+    line-height: 1.55;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Compliance                                                          */
+  /* ------------------------------------------------------------------ */
+  table.compliance {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 9.5pt;
+    border: 1px solid #1F2230;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  table.compliance th {
+    background: #0F111A;
+    text-align: left;
+    padding: 10px 12px;
+    font-size: 7.5pt;
+    text-transform: uppercase;
+    letter-spacing: 1.4px;
+    color: #A8AAB8;
+    font-weight: 700;
+  }
+  table.compliance td {
+    background: #13151C;
+    padding: 12px;
+    border-top: 1px solid #1F2230;
+    vertical-align: middle;
+  }
+</style>
+</head>
+<body>
+
+<!-- ======================================================= -->
+<!-- PAGE 1 — Cover                                            -->
+<!-- ======================================================= -->
+<section class="page cover">
+  <div class="cover-brand">FAIRAUDIT</div>
+
+  <div class="cover-mid">
+    <div class="cover-eyebrow">Algorithmic Fairness · Independent Review</div>
+    <h1 class="cover-title">Bias Audit<br>Report</h1>
+    <div class="cover-subtitle">
+      <span class="file">{{ filename }}</span> &nbsp;·&nbsp; {{ timestamp }}
+    </div>
+    <hr class="brand-rule">
+
+    <div class="cover-risk">
+      <div class="risk-circle">
+        <div class="pct">{{ risk_score_pct }}</div>
+        <div class="lbl">Risk Score</div>
+      </div>
+      <div class="risk-summary">
+        <div class="level">{{ risk_label }} Risk</div>
+        <div class="level-sub">
+          Aggregate severity across {{ n_attrs }} protected attribute{{ '' if n_attrs == 1 else 's' }},
+          measured with EEOC 80% rule and statistical-parity metrics.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cover-footer">
+    <div class="prepared-for">
+      Prepared for
+      <div class="name">{{ user.full_name }}</div>
+      <div class="email">{{ user.email }}</div>
+    </div>
+    <div class="confidential">Confidential</div>
+  </div>
+</section>
+
+
+<!-- ======================================================= -->
+<!-- PAGE 2 — Executive summary                                -->
+<!-- ======================================================= -->
+<section class="page">
+  <div class="section-header">
+    <span class="label">01 · Executive Summary</span>
+    <div class="title">At a Glance</div>
+  </div>
+
+  <div class="stats-row">
+    <div class="stat-box">
+      <div class="v">{{ "{:,}".format(row_count) }}</div>
+      <div class="k">Dataset Rows</div>
+    </div>
+    <div class="stat-box">
+      <div class="v">{{ column_count }}</div>
+      <div class="k">Columns Analyzed</div>
+    </div>
+    <div class="stat-box">
+      <div class="v">{{ n_attrs }}</div>
+      <div class="k">Attributes Checked</div>
+    </div>
+    <div class="stat-box">
+      <div class="v" style="color: {{ risk_color }};">{{ risk_label }}</div>
+      <div class="k">Risk Level</div>
+    </div>
+  </div>
+
+  <div class="section-header">
+    <span class="label">Key Findings</span>
+  </div>
+  <div class="findings">
+    {% for f in key_findings %}
+    <div class="finding">
+      <div class="icon" style="color: {{ f.color }};">{{ f.icon }}</div>
+      <div class="finding-text">{{ f.text|safe }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="chart-block centered">
+    <img src="{{ risk_chart }}" style="width: 300px;" alt="Risk gauge">
+  </div>
+
+  <div class="section-header" style="margin-top: 18px;">
+    <span class="label">Auto-Detection Summary</span>
+  </div>
+  <div class="detect-box">
+    <div class="detect-row">
+      <span class="k">Label column detected</span>
+      <span class="v">{{ label_col }} &nbsp;<span style="color: #A8AAB8;">(confidence: {{ "%.0f"|format(label_confidence * 100) }}%)</span></span>
+    </div>
+    <div class="detect-row">
+      <span class="k">Protected attributes</span>
+      <span class="v">{{ protected_attrs|join(", ") if protected_attrs else "—" }}</span>
+    </div>
+  </div>
+</section>
+
+
+<!-- ======================================================= -->
+<!-- PAGE 3 — Detailed bias analysis                          -->
+<!-- ======================================================= -->
+<section class="page">
+  <div class="section-header">
+    <span class="label">02 · Detailed Bias Analysis</span>
+    <div class="title">Per-attribute Fairness</div>
+  </div>
+
+  {% if attr_sections %}
+    {% for s in attr_sections %}
+    <div class="attr-section">
+      <div class="attr-head">
+        <div class="name">{{ s.attr }}</div>
+        <span class="severity-badge"
+              style="background: {{ s.severity_bg }}; color: {{ s.severity_color }};">
+          {{ s.severity_label }} Severity
+        </span>
+      </div>
+
+      <div class="attr-grid">
+        <div class="col col-left">
+          <table class="metrics">
+            <tr><th>Metric</th><th>Value</th><th>Status</th></tr>
+            {% for m in s.metrics %}
+            <tr>
+              <td class="metric">{{ m.name }}</td>
+              <td class="value">{{ m.value }}</td>
+              <td>
+                {% if m.pass %}
+                  <span class="pass-pill pass-yes">✓ Pass</span>
+                {% else %}
+                  <span class="pass-pill pass-no">✗ Fail</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </table>
+        </div>
+        <div class="col col-right">
+          <div class="di-vis">
+            <div class="lbl">Disparate Impact</div>
+            <div class="num" style="color: {{ s.di_color }};">{{ "%.2f"|format(s.di_value) }}</div>
+            <svg width="100%" height="14" viewBox="0 0 100 14" preserveAspectRatio="none">
+              <rect x="0" y="3" width="100" height="8" fill="#1F2230" rx="4" ry="4"/>
+              <rect x="0" y="3" width="{{ "%.1f"|format(s.di_percent) }}" height="8"
+                    fill="{{ s.di_color }}" rx="4" ry="4"/>
+              <line x1="{{ "%.1f"|format(s.threshold_percent) }}"
+                    x2="{{ "%.1f"|format(s.threshold_percent) }}"
+                    y1="0" y2="14"
+                    stroke="#FFFFFF" stroke-dasharray="2,2" stroke-width="0.8" opacity="0.85"/>
+            </svg>
+            <div class="threshold-note">Dashed line = 0.80 legal threshold</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="finding">
+      <div class="finding-text" style="color:#A8AAB8;">No bias results available for this audit run.</div>
+    </div>
+  {% endif %}
+
+  <div class="chart-block">
+    <img src="{{ disparate_impact_chart }}" style="width: 100%;" alt="Disparate Impact comparison">
+  </div>
+</section>
+
+
+<!-- ======================================================= -->
+<!-- PAGE 4 — Group distributions                              -->
+<!-- ======================================================= -->
+<section class="page">
+  <div class="section-header">
+    <span class="label">03 · Group Distributions</span>
+    <div class="title">Population Breakdown</div>
+  </div>
+
+  <div class="chart-block">
+    <img src="{{ group_distribution_chart }}" style="width: 100%;" alt="Group distribution">
+  </div>
+
+  {% for t in group_tables %}
+  <div class="group-block">
+    <div class="attr-name">{{ t.attr }}</div>
+    <table class="groups">
+      <tr>
+        <th>Group</th>
+        <th>Count</th>
+        <th>Percentage</th>
+        <th>Positive Rate</th>
+      </tr>
+      {% for r in t.rows %}
+      <tr>
+        <td>{{ r.group }}</td>
+        <td>{{ "{:,}".format(r.count) }}</td>
+        <td>{{ r.percent }}</td>
+        <td>{{ r.positive_rate }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endfor %}
+
+  <p class="interp">{{ interpretation|safe }}</p>
+</section>
+
+
+<!-- ======================================================= -->
+<!-- PAGE 5 — Recommendations                                  -->
+<!-- ======================================================= -->
+<section class="page">
+  <div class="section-header">
+    <span class="label">04 · Recommendations</span>
+    <div class="title">Mitigation Roadmap</div>
+  </div>
+
+  {% for rec in recommendations %}
+  <div class="rec-card">
+    <div class="rec-head">
+      <div class="lhs">
+        <span class="icon">{{ rec.icon }}</span>
+        <span class="title">{{ rec.title }}</span>
+      </div>
+      <span class="effort-badge effort-{{ rec.effort }}">{{ rec.effort }} effort</span>
+    </div>
+    <div class="rec-desc">{{ rec.description }}</div>
+  </div>
+  {% endfor %}
+</section>
+
+
+<!-- ======================================================= -->
+<!-- PAGE 6 — Compliance checklist                             -->
+<!-- ======================================================= -->
+<section class="page">
+  <div class="section-header">
+    <span class="label">05 · Compliance Checklist</span>
+    <div class="title">Regulatory Mapping</div>
+  </div>
+
+  <table class="compliance">
+    <tr>
+      <th style="width: 22%;">Regulation</th>
+      <th style="width: 30%;">Requirement</th>
+      <th style="width: 18%;">Status</th>
+      <th>Evidence</th>
+    </tr>
+    {% for c in compliance_rows %}
+    <tr>
+      <td style="font-weight: 700; color: white;">{{ c.regulation }}</td>
+      <td style="color: #C2C5D6;">{{ c.requirement }}</td>
+      <td>
+        <span class="pass-pill"
+              style="background: {{ c.bg }}; color: {{ c.color }};">
+          {{ c.icon }} {{ c.status }}
+        </span>
+      </td>
+      <td style="color: #C2C5D6;">{{ c.evidence }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <p class="interp">
+    This audit covers <strong>data-level fairness</strong> only. Model-level metrics
+    (equalized odds, calibration, sub-group accuracy) are evaluated separately once
+    predictions are available. All findings should be reviewed by a qualified
+    compliance officer prior to any production rollout, and re-audited at the
+    cadence required by the relevant regulatory regime.
+  </p>
+</section>
+
+</body>
+</html>

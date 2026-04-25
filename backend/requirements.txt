@@ -6,6 +6,12 @@ fairlearn==0.10.0
 shap==0.45.0
 scikit-learn==1.4.2
 aiosqlite==0.20.0
+# Postgres async driver. Required when DATABASE_URL=postgresql+asyncpg://...
+# (the recommended Railway production setup; SQLite is ephemeral on Railway).
+asyncpg==0.29.0
+# Sync Postgres driver. Used only by Alembic during `alembic upgrade head`,
+# because Alembic itself runs migrations synchronously.
+psycopg2-binary==2.9.9
 python-multipart==0.0.9
 pydantic==2.7.1
 python-jose[cryptography]==3.3.0
@@ -17,3 +23,14 @@ sqlalchemy==2.0.36
 itsdangerous==2.2.0
 email-validator==2.1.1
 greenlet>=3.1.1
+weasyprint==62.3
+jinja2==3.1.4
+matplotlib==3.8.4
+# Advanced analysis engines (intersectional, causal, recourse, synthetic, lineage,
+# regulatory). Each engine has a graceful fallback so a missing optional dep
+# never breaks the API.
+dowhy==0.11.1
+dice-ml==0.11
+sdv==1.9.0
+sentence-transformers==3.0.1
+evidently==0.4.30

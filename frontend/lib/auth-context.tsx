@@ -23,6 +23,7 @@ import {
   registerUnauthorizedHandler,
   setAuthSession,
 } from "@/lib/api";
+import { isTokenExpired } from "@/lib/auth";
 
 type AuthContextValue = {
   user: AuthUser | null;
@@ -45,10 +46,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
 
-  // Hydrate from localStorage once, on mount.
   useEffect(() => {
-    setUser(getStoredUser());
-    setAccessToken(getAccessToken());
+    const token = getAccessToken();
+    if (token && !isTokenExpired(token)) {
+      setAccessToken(token);
+      setUser(getStoredUser());
+    } else if (token) {
+      clearAuthSession();
+    }
     setIsReady(true);
   }, []);
 

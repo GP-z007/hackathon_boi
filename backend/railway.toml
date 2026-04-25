@@ -1,19 +1,23 @@
 [build]
 builder = "dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 # Run pending migrations before serving traffic. Falls back to SQLAlchemy
-# create_all on startup if alembic is unavailable.
+# create_all() inside the FastAPI startup hook if alembic is unavailable.
 startCommand = "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "on_failure"
 
-# Required Railway environment variables (set these in the Railway dashboard;
-# never commit real values):
+# ───── Required environment variables (set these in the Railway dashboard) ─────
 #
-#   SECRET_KEY      ← python -c "import secrets; print(secrets.token_hex(32))"
-#   ENVIRONMENT     ← production
-#   CORS_ORIGINS    ← https://your-app.vercel.app
-#   DATABASE_URL    ← sqlite+aiosqlite:///./bias_audit.db  (or a managed Postgres URL)
-#   MAX_UPLOAD_SIZE_MB ← 10
+#   SECRET_KEY         python -c "import secrets; print(secrets.token_hex(32))"
+#   ENVIRONMENT        production
+#   CORS_ORIGINS       https://your-app.vercel.app   (no trailing slash)
+#   DATABASE_URL       postgresql+asyncpg://USER:PASS@HOST:PORT/DBNAME
+#                      (use the managed-Postgres add-on; SQLite is ephemeral)
+#   MAX_UPLOAD_SIZE_MB 10
+#
+# Optional:
+#   DATASET_STORAGE_DIR   /data   (only meaningful if you attach a Volume)

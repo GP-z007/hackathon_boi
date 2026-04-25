@@ -1,7 +1,9 @@
 "use client";
 
+import { Bot, Copy, KeyRound, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { useToast } from "@/components/Toast";
 import { FullAnalysisResponse } from "@/lib/api";
 
 type GeminiAnalystProps = {
@@ -53,8 +55,8 @@ citing the specific metric values as evidence.
 Audit data:
 ${JSON.stringify(result.bias_results, null, 2)}
 Disparate impact scores: ${Object.entries(result.bias_results)
-  .map(([k, v]) => `${k}: ${v.disparate_impact}`)
-  .join(", ")}`,
+    .map(([k, v]) => `${k}: ${v.disparate_impact}`)
+    .join(", ")}`,
 };
 
 const MAX_OUTPUT_TOKENS = 8192;
@@ -122,7 +124,7 @@ async function callGeminiGenerate(apiKey: string, prompt: string): Promise<Gemin
     let out = text;
     if (finishReason === "MAX_TOKENS") {
       out +=
-        "\n\n— Note: The model hit its output length limit. Click the same button again for a shorter follow-up, or use a smaller dataset summary.";
+        "\n\n— Note: The model hit its output length limit. Click the same button again for a shorter follow-up.";
     }
     return { text: out, finishReason };
   }
@@ -130,11 +132,19 @@ async function callGeminiGenerate(apiKey: string, prompt: string): Promise<Gemin
   throw new Error(lastError);
 }
 
+const PROMPTS: { id: keyof typeof promptBuilders; label: string }[] = [
+  { id: "explain", label: "Explain this analysis" },
+  { id: "risks", label: "What are the risks?" },
+  { id: "fixes", label: "How do I fix this bias?" },
+  { id: "compliance", label: "Is this legally compliant?" },
+];
+
 export default function GeminiAnalyst({ result }: GeminiAnalystProps) {
+  const toast = useToast();
   const [apiKey, setApiKey] = useState("");
   const [response, setResponse] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [activeId, setActiveId] = useState<keyof typeof promptBuilders | null>(null);
 
   useEffect(() => {
     setApiKey(window.localStorage.getItem("gemini_api_key") || "");
@@ -142,138 +152,228 @@ export default function GeminiAnalyst({ result }: GeminiAnalystProps) {
 
   const saveKey = () => {
     window.localStorage.setItem("gemini_api_key", apiKey.trim());
-    setError("");
+    toast.success("Gemini key saved.");
   };
 
-  const runPrompt = async (prompt: string) => {
+  const runPrompt = async (id: keyof typeof promptBuilders) => {
     const key = apiKey.trim();
     if (!key) {
-      setError("Enter your Gemini API key above. Get one free at https://aistudio.google.com/apikey");
+      toast.error("Add a Gemini API key first.");
       return;
     }
     setLoading(true);
-    setError("");
+    setActiveId(id);
     setResponse("");
     try {
+      const prompt = promptBuilders[id](result);
       const { text } = await callGeminiGenerate(key, prompt);
       setResponse(text);
     } catch (e) {
       const message = e instanceof Error ? e.message : "Request failed.";
-      setError(message);
+      toast.error(message, "Gemini");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <section style={{ marginTop: 20, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 16 }}>
-      <h3 style={{ marginTop: 0, marginBottom: 12 }}>AI Analyst (powered by Gemini)</h3>
+    <section
+      style={{
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+        borderLeft: "3px solid var(--brand)",
+        borderRadius: 14,
+        padding: 20,
+        position: "relative",
+        overflow: "hidden",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <span
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 10,
+            background: "var(--brand-soft)",
+            color: "var(--brand)",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Bot size={18} />
+        </span>
+        <div>
+          <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>AI Analyst</h3>
+          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+            Powered by Gemini · key never leaves your browser
+          </div>
+        </div>
+      </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          marginBottom: 14,
+          background: "var(--surface-2)",
+          border: "1px solid var(--border)",
+          borderRadius: 10,
+          padding: 4,
+        }}
+      >
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            paddingLeft: 10,
+            color: "var(--text-muted)",
+          }}
+        >
+          <KeyRound size={14} />
+        </span>
         <input
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           placeholder="Paste Gemini API key"
           type="password"
           autoComplete="off"
-          style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db" }}
+          style={{
+            flex: 1,
+            background: "transparent",
+            border: "none",
+            outline: "none",
+            color: "var(--text)",
+            fontSize: 13,
+            padding: "8px 4px",
+          }}
         />
         <button
           type="button"
           onClick={saveKey}
-          style={{ borderRadius: 8, border: "1px solid #d1d5db", padding: "8px 12px", cursor: "pointer" }}
+          style={{
+            padding: "6px 12px",
+            background: "var(--surface-3)",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            color: "var(--text)",
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
         >
           Save
         </button>
       </div>
-      <p style={{ marginTop: 0, fontSize: 12, color: "#6b7280" }}>
-        Key is stored in localStorage only and sent directly to Google, not to our backend.
-      </p>
 
-      {!apiKey.trim() && (
-        <p style={{ color: "#b45309", marginTop: 0 }}>
-          Enter your Gemini API key above, then click Save. Get a key at{" "}
-          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
-            aistudio.google.com/apikey
-          </a>
-          .
-        </p>
-      )}
-
-      {error && (
-        <p style={{ color: "#b91c1c", marginTop: 0, whiteSpace: "pre-wrap" }}>
-          {error}
-        </p>
-      )}
-
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-        <button
-          type="button"
-          disabled={loading}
-          onClick={() => void runPrompt(promptBuilders.explain(result))}
-          style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", cursor: loading ? "wait" : "pointer" }}
-        >
-          Explain this analysis
-        </button>
-        <button
-          type="button"
-          disabled={loading}
-          onClick={() => void runPrompt(promptBuilders.risks(result))}
-          style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", cursor: loading ? "wait" : "pointer" }}
-        >
-          What are the risks?
-        </button>
-        <button
-          type="button"
-          disabled={loading}
-          onClick={() => void runPrompt(promptBuilders.fixes(result))}
-          style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", cursor: loading ? "wait" : "pointer" }}
-        >
-          How do I fix this bias?
-        </button>
-        <button
-          type="button"
-          disabled={loading}
-          onClick={() => void runPrompt(promptBuilders.compliance(result))}
-          style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", cursor: loading ? "wait" : "pointer" }}
-        >
-          Is this legally compliant?
-        </button>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+        {PROMPTS.map((p) => {
+          const isActive = activeId === p.id && loading;
+          return (
+            <button
+              key={p.id}
+              type="button"
+              disabled={loading}
+              onClick={() => void runPrompt(p.id)}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 999,
+                border: "1px solid var(--border)",
+                background: isActive ? "var(--brand-soft)" : "transparent",
+                color: isActive ? "var(--text)" : "var(--text-dim)",
+                fontSize: 12.5,
+                fontWeight: 600,
+                cursor: loading ? "wait" : "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                transition: "background 150ms ease, color 150ms ease, border-color 150ms ease",
+              }}
+              onMouseEnter={(e) => {
+                if (!loading) {
+                  e.currentTarget.style.background = "var(--brand-soft)";
+                  e.currentTarget.style.color = "var(--text)";
+                  e.currentTarget.style.borderColor = "rgba(108,99,255,0.4)";
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!isActive) {
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.color = "var(--text-dim)";
+                  e.currentTarget.style.borderColor = "var(--border)";
+                }
+              }}
+            >
+              <Sparkles size={12} />
+              {p.label}
+            </button>
+          );
+        })}
       </div>
 
       <div
+        className="scanlines"
         style={{
-          border: "1px solid #e5e7eb",
-          borderRadius: 10,
-          minHeight: 480,
-          maxHeight: "75vh",
+          background: "var(--surface-2)",
+          border: "1px solid var(--border)",
+          borderRadius: 12,
+          padding: 16,
+          fontFamily: "var(--font-mono)",
+          fontSize: 13,
+          lineHeight: 1.6,
+          color: "var(--text)",
+          minHeight: 280,
+          maxHeight: "65vh",
           overflowY: "auto",
-          padding: 12,
-          background: "#f8fafc",
           whiteSpace: "pre-wrap",
           wordBreak: "break-word",
         }}
       >
-        {response}
+        {response || (
+          <span style={{ color: "var(--text-muted)" }}>
+            Run a prompt above to see Gemini&apos;s analysis here.
+          </span>
+        )}
         {loading && (
-          <span style={{ display: "inline-block", marginLeft: 2, animation: "blink 1s step-end infinite" }}>|</span>
+          <span
+            style={{
+              display: "inline-block",
+              marginLeft: 2,
+              animation: "blink 1s step-end infinite",
+              color: "var(--brand)",
+            }}
+          >
+            ▍
+          </span>
         )}
       </div>
 
-      <button
-        type="button"
-        onClick={() => void navigator.clipboard.writeText(response)}
-        disabled={!response}
-        style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", cursor: "pointer" }}
-      >
-        Copy
-      </button>
-
-      <style>{`
-        @keyframes blink {
-          50% { opacity: 0; }
-        }
-      `}</style>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
+        <button
+          type="button"
+          onClick={() => {
+            void navigator.clipboard.writeText(response);
+            toast.success("Copied to clipboard.");
+          }}
+          disabled={!response}
+          style={{
+            padding: "6px 12px",
+            borderRadius: 8,
+            border: "1px solid var(--border)",
+            background: "transparent",
+            color: response ? "var(--text)" : "var(--text-muted)",
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: response ? "pointer" : "not-allowed",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <Copy size={12} />
+          Copy
+        </button>
+      </div>
     </section>
   );
 }
