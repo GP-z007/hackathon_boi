@@ -14,8 +14,14 @@ from sklearn.metrics import accuracy_score
 
 
 def run_data_audit(df: pd.DataFrame, label_col: str, protected_attr: str) -> dict:
+    # AIF360 rejects any NA in the dataframe; only label + protected columns are needed.
+    audit_df = df.loc[:, [label_col, protected_attr]].copy()
+    audit_df = audit_df.dropna(how="any")
+    if audit_df.empty:
+        raise ValueError("No complete rows after dropping missing label or protected values.")
+
     dataset = BinaryLabelDataset(
-        df=df.copy(),
+        df=audit_df,
         label_names=[label_col],
         protected_attribute_names=[protected_attr],
     )
