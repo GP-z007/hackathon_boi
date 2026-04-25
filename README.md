@@ -1,4 +1,4 @@
-# DasViewer
+# DasViewer(ProtoType)
 
 > End-to-end fairness auditing for tabular ML datasets — bias detection, intersectional analysis, causal attribution, individual recourse, synthetic data generation, regulatory compliance checks, auto-generated model cards, and data-pipeline lineage tracking — all behind a clean Next.js UI.
 
