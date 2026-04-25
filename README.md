@@ -159,30 +159,6 @@ Full request/response shapes live in `backend/main.py` and `frontend/lib/api.ts`
 
 ---
 
-## Deployment
-
-See **[DEPLOY.md](./DEPLOY.md)** for the full Railway + Vercel walkthrough. The TL;DR:
-
-```text
-backend/  → Railway  (Dockerfile builder + managed Postgres add-on)
-frontend/ → Vercel   (vercel.json, framework auto-detect)
-
-Required envs:
-  backend  → SECRET_KEY, ENVIRONMENT, CORS_ORIGINS, DATABASE_URL (auto from Postgres add-on),
-             MAX_UPLOAD_SIZE_MB
-  frontend → NEXT_PUBLIC_API_URL, NEXT_PUBLIC_WS_URL
-```
-
-The image was deliberately slimmed (CPU-only torch, `.dockerignore` excluding
-`.venv` / caches) to fit Railway's plan limits — final image is ~3.5 GB instead
-of the default ~5–6 GB.
-
-> **Heads-up:** if Railway warns `Script start.sh not found`, the service is
-> using nixpacks instead of the Dockerfile builder. Fix in `DEPLOY.md` →
-> "Fixing `Script start.sh not found`" — set Root Directory to `backend` and
-> force the Dockerfile builder in service settings.
-
----
 
 ## Architecture diagram
 
