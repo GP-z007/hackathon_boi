@@ -29,10 +29,11 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 def _normalize_database_url(url: str) -> str:
     """Coerce hosted-Postgres URLs into the async-driver form SQLAlchemy needs.
 
-    Render and Heroku expose `postgres://...`. SQLAlchemy 2.x rejects that
-    scheme, and our app uses the async runtime so it specifically needs
-    `postgresql+asyncpg://...`. Rewrite both legacy variants transparently
-    so operators never need to hand-edit the URL injected by the platform.
+    Railway, Render, and Heroku expose `postgres://...` or bare
+    `postgresql://...`. SQLAlchemy 2.x rejects the legacy alias, and our app
+    uses the async runtime so it specifically needs `postgresql+asyncpg://...`.
+    Rewrite both legacy variants transparently so operators never need to
+    hand-edit the URL injected by the platform.
     """
     if url.startswith("postgres://"):
         return "postgresql+asyncpg://" + url[len("postgres://"):]
@@ -41,9 +42,31 @@ def _normalize_database_url(url: str) -> str:
     return url
 
 
-DATABASE_URL = _normalize_database_url(
-    os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./bias_audit.db")
-)
+def _resolve_database_url() -> str:
+    """Pick the right DATABASE_URL with a strict-mode guard for production.
+
+    In production we refuse to silently fall back to a local SQLite file --
+    that path on managed hosts (Railway/Render/Fly) lives on an ephemeral
+    container filesystem, so every redeploy would wipe all data without
+    warning. Force the operator to wire a real database explicitly.
+    """
+    raw = os.getenv("DATABASE_URL")
+    if raw:
+        return _normalize_database_url(raw)
+
+    if os.getenv("ENVIRONMENT", "").lower() == "production":
+        raise RuntimeError(
+            "DATABASE_URL is not set but ENVIRONMENT=production. Refusing to "
+            "fall back to local SQLite -- the container filesystem is "
+            "ephemeral on managed hosts and every redeploy would wipe data. "
+            "Wire DATABASE_URL to your managed Postgres (e.g. on Railway: "
+            "Variables -> + New -> Add Reference -> Postgres.DATABASE_URL)."
+        )
+
+    return "sqlite+aiosqlite:///./bias_audit.db"
+
+
+DATABASE_URL = _resolve_database_url()
 
 
 def _utcnow() -> datetime:
